@@ -110,7 +110,7 @@ def publish_ecg():
 
             now = time.time()
             if now - last_sent >= interval and buffer:
-                ecg_msg = json.dumps({
+                ecg_msg = json.dumps({ 
                     "patient_id": PATIENT_ID,
                     "doctor_id": DOCTOR_ID,
                     "ecg": buffer,

@@ -127,7 +127,7 @@ def medir_presion_automatica(velocidad=100):
     print("Cerrando válvula y comenzando inflado")
     time.sleep(0.2)   # Pequeña pausa para asegurar el cierre
     motor_inflar(velocidad)
-    presion_objetivo = 195
+    presion_objetivo = 185
     presiones = []
     tiempos = []
     t0 = time.time()
@@ -138,7 +138,7 @@ def medir_presion_automatica(velocidad=100):
             presiones.append(presion)
             tiempos.append(t)
             print(f"Presión: {presion:.1f} mmHg", end='\r')
-            if presion >= presion_objetivo or presion > 210:
+            if presion >= presion_objetivo or presion > 200:
                 break
         time.sleep(0.03)  # Mayor frecuencia de muestreo
     # --- Mantener presión objetivo 6 segundos ---
@@ -155,14 +155,17 @@ def medir_presion_automatica(velocidad=100):
             tiempos.append(t)
             print(f"Presión (manteniendo): {presion:.1f} mmHg", end='\r')
             if presion > presion_objetivo + 2:
+                motor_parar()
                 valvula_abrir()
-                time.sleep(0.05)  # Pulso corto para liberar presión
+                time.sleep(0.05)
                 valvula_cerrar()
             elif presion < presion_objetivo - 2:
-                # El motor sigue encendido, solo aseguramos válvula cerrada
+                motor_inflar(velocidad)
                 valvula_cerrar()
-            # Si está dentro del rango, no hacer nada (válvula cerrada, motor encendido)
-        time.sleep(0.03)  # Mayor frecuencia de muestreo
+            else:
+                motor_parar()
+                valvula_cerrar()
+        time.sleep(0.03)
     motor_parar()
     valvula_cerrar()  # Asegurar válvula cerrada antes de desinflar
     print("\nMantención finalizada. Desinflando lentamente...")
@@ -198,7 +201,7 @@ def medir_presion_automatica(velocidad=100):
     print(f"Presión Sistólica estimada: {sistolica:.1f} mmHg" if sistolica else "No detectada")
     print(f"Presión Diastólica estimada: {diastolica:.1f} mmHg" if diastolica else "No detectada")
 
-def medir_presion_automatica_pulsos(velocidad=100, pulso_motor=0.1, pausa_lectura=0.05):
+def medir_presion_automatica_pulsos(velocidad=100, pulso_motor=0.3, pausa_lectura=0.01):
     sensor = HX710B(HX710B_DOUT, HX710B_SCK)
     print("Descartando primeras lecturas...")
     for _ in range(5):
@@ -208,7 +211,7 @@ def medir_presion_automatica_pulsos(velocidad=100, pulso_motor=0.1, pausa_lectur
     valvula_cerrar()
     print("Cerrando válvula y comenzando inflado por pulsos")
     time.sleep(0.2)
-    presion_objetivo = 195
+    presion_objetivo = 185
     presiones = []
     tiempos = []
     t0 = time.time()
@@ -223,7 +226,7 @@ def medir_presion_automatica_pulsos(velocidad=100, pulso_motor=0.1, pausa_lectur
             presiones.append(presion)
             tiempos.append(t)
             print(f"Presión: {presion:.1f} mmHg", end='\r')
-            if presion >= presion_objetivo or presion > 210:
+            if presion >= presion_objetivo or presion > 200:
                 break
     # --- Mantener presión objetivo 6 segundos ---
     print("\nPresión objetivo alcanzada. Manteniendo presión...")

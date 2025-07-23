@@ -250,6 +250,7 @@ def publicar_oxi():
         time.sleep(5)
 
 def publicar_ecg():
+    print("Hilo ECG iniciado")  # Debug: inicio del hilo
     buffer = []
     intervalo = 0.5  # Enviar cada 0.5 segundos
     ultimo_envio = time.time()
@@ -269,13 +270,16 @@ def publicar_ecg():
                 time.sleep(1)
                 continue
 
-            # Leer datos ECG rápidamente
+            # Leer todos los datos ECG disponibles rápidamente
             if ser is not None and ser.in_waiting > 0:
                 try:
-                    linea = ser.readline().decode("utf-8").strip()
-                    if linea.isdigit():
-                        buffer.append(int(linea))
+                    while ser.in_waiting > 0:
+                        linea = ser.readline().decode("utf-8").strip()
+                        print(f"ECG linea recibida: '{linea}' (in_waiting={ser.in_waiting})")  # Debug: datos recibidos
+                        if linea.isdigit():
+                            buffer.append(int(linea))
                 except UnicodeDecodeError:
+                    print("Error de codificación al leer ECG")  # Debug: error de codificación
                     pass
                 except Exception as e:
                     print(f"Error leyendo ECG: {e}")
@@ -283,30 +287,35 @@ def publicar_ecg():
             # Enviar datos cada intervalo
             if ahora - ultimo_envio >= intervalo and buffer:
                 print(f"ECG: Enviando {len(buffer)} muestras")
-                
-                # Enviar a RabbitMQ
-                rabbitmq_data = {
-                    "patient_id": current_patient_id,
-                    "doctor_id": current_doctor_id,
-                    "ecg_values": buffer,
-                    "timestamp": ahora
-                }
-                send_to_rabbitmq("ecg", rabbitmq_data)
-                
-                # Enviar a MQTT
-                mqtt_data = {
-                    "patient_id": current_patient_id,
-                    "doctor_id": current_doctor_id,
-                    "ecg": buffer,
-                    "timestamp": ahora
-                }
-                client.publish(mqtt_topic_ecg, json.dumps(mqtt_data))
-                
-                print(f"ECG enviado: {len(buffer)} valores")
+                try:
+                    # Enviar a RabbitMQ
+                    rabbitmq_data = {
+                        "patient_id": current_patient_id,
+                        "doctor_id": current_doctor_id,
+                        "ecg_values": buffer,
+                        "timestamp": ahora
+                    }
+                    send_to_rabbitmq("ecg", rabbitmq_data)
+                    print("ECG publicado en RabbitMQ correctamente")  # Debug: éxito RabbitMQ
+                except Exception as e:
+                    print(f"Fallo al publicar ECG en RabbitMQ: {e}")  # Debug: error RabbitMQ
+                try:
+                    # Enviar a MQTT
+                    mqtt_data = {
+                        "patient_id": current_patient_id,
+                        "doctor_id": current_doctor_id,
+                        "ecg": buffer,
+                        "timestamp": ahora
+                    }
+                    client.publish(mqtt_topic_ecg, json.dumps(mqtt_data))
+                    print("ECG publicado en MQTT correctamente")  # Debug: éxito MQTT
+                except Exception as e:
+                    print(f"Fallo al publicar ECG en MQTT: {e}")  # Debug: error MQTT
                 buffer = []
                 ultimo_envio = ahora
 
         except Exception as e:
+            print(f"Error en publicar ECG: {str(e)}")  # Debug: error general
             publicar_status(f"Error en publicar ECG: {str(e)}")
             time.sleep(0.1)
 
@@ -403,4 +412,4 @@ finally:
         ser.close()
     client.loop_stop()
     client.disconnect()
-    print("MQTT desconectado")	
+    print("MQTT desconectado")

@@ -84,7 +84,7 @@ class MLX90614:
 
 # ---------- Clase HX710B para presión arterial ----------
 class HX710B:
-    def __init__(self, dout_pin, sck_pin, offset=0, scale=10041.60):
+    def __init__(self, dout_pin, sck_pin, offset=0, scale=10060.60):
         self.dout_pin = dout_pin
         self.sck_pin = sck_pin
         self.offset = offset
@@ -128,10 +128,12 @@ class HX710B:
 
 # ---------- Control de motor y válvula ----------
 def motor_inflar(velocidad=100):
+    print(f"[DEBUG] motor_inflar llamado con velocidad={velocidad}")
     GPIO.output(MOTOR_IN1, GPIO.HIGH)
     pwm_motor.ChangeDutyCycle(velocidad)  # velocidad de 0 a 100
 
 def motor_parar():
+    print("[DEBUG] motor_parar llamado")
     pwm_motor.ChangeDutyCycle(0)
     GPIO.output(MOTOR_IN1, GPIO.LOW)
 
@@ -161,7 +163,7 @@ def detectar_sistolica_diastolica_oscilometrico(presiones):
     max_osc = max(diffs)
     idx_max = diffs.index(max_osc) + 1
     resultados = {}
-    for umbral_pct in [0.4, 0.5, 0.6]:
+    for umbral_pct in [0.2,0.3,0.4, 0.5, 0.6]:
         umbral = umbral_pct * max_osc
         sistolica_temp = None
         diastolica_temp = None
@@ -197,7 +199,7 @@ def detectar_sistolica_diastolica_oscilometrico(presiones):
     return resultados[0.5]
 
 # ---------- Medición automática de presión arterial ----------
-def medir_presion_automatica_pulsos(velocidad=100, pulso_motor=0.3, pausa_lectura=0.01):
+def medir_presion_automatica_pulsos(velocidad=85, pulso_motor=0.1, pausa_lectura=0.01):
     sensor = HX710B(HX710B_DOUT, HX710B_SCK)
     print("Descartando primeras lecturas...")
     for _ in range(5):
@@ -207,7 +209,7 @@ def medir_presion_automatica_pulsos(velocidad=100, pulso_motor=0.3, pausa_lectur
     valvula_cerrar()
     print("Cerrando válvula y comenzando inflado por pulsos")
     time.sleep(0.2)
-    presion_objetivo = 185
+    presion_objetivo = 230
     presiones = []
     tiempos = []
     t0 = time.time()
@@ -224,7 +226,7 @@ def medir_presion_automatica_pulsos(velocidad=100, pulso_motor=0.3, pausa_lectur
             presiones.append(presion)
             tiempos.append(t)
             print(f"Presión: {presion:.1f} mmHg", end='\r')
-            if presion >= presion_objetivo or presion > 200:
+            if presion >= presion_objetivo or presion > 240:
                 break
                 
     # Mantener presión objetivo 6 segundos
@@ -259,7 +261,7 @@ def medir_presion_automatica_pulsos(velocidad=100, pulso_motor=0.3, pausa_lectur
             presiones.append(presion)
             tiempos.append(t)
             print(f"Presión: {presion:.1f} mmHg", end='\r')
-            if presion < 40:
+            if presion < 50:
                 desinflando = False
         else:
             desinflando = False
@@ -458,13 +460,13 @@ def publicar_presion():
             receive_user_config()
             
             if not monitoring_active or current_patient_id is None:
-                time.sleep(60)  # Revisar cada minuto si no está activo
+                time.sleep(0)  # Revisar cada 40 segundos si no está activo
                 continue
             
             print(f"Presión: Monitoreo ACTIVO - Iniciando medición de presión arterial...")
             
-            # Medir presión arterial automáticamente con velocidad 100
-            sistolica, diastolica = medir_presion_automatica_pulsos(velocidad=100)
+            # Medir presión arterial automáticamente con velocidad 75
+            sistolica, diastolica = medir_presion_automatica_pulsos(velocidad=90)
             
             # Enviar datos aunque solo se detecte uno de los valores
             if sistolica or diastolica:
@@ -508,11 +510,11 @@ def publicar_presion():
         except Exception as e:
             publicar_status(f"Error en medición de presión: {str(e)}")
         
-        # Esperar 30 minutos antes de la siguiente medición
-        time.sleep(1800)  # 30 minutos = 1800 segundos
+        # Esperar 1 minuto antes de la siguiente medición
+        time.sleep(60)
 
 def publicar_ecg():
-    print("Hilo ECG iniciado")
+    print("Hilo ECG iniciado")  # Debug: inicio del hilo
     buffer = []
     intervalo = 0.5  # Enviar cada 0.5 segundos
     ultimo_envio = time.time()
@@ -527,46 +529,57 @@ def publicar_ecg():
                 ultimo_config_check = ahora
 
             if not monitoring_active or current_patient_id is None:
-                time.sleep(0.1)
+                print(f"ECG: Monitoreo INACTIVO (monitoring_active={monitoring_active}, patient_id={current_patient_id})")
+                publicar_status("Esperando activación de monitoreo y ID paciente para ECG...")
+                time.sleep(1)
                 continue
 
             # Leer todos los datos ECG disponibles rápidamente
             if ser is not None and ser.in_waiting > 0:
                 try:
-                    line = ser.readline().decode('utf-8').strip()
-                    if line and line.replace('.', '').replace('-', '').isdigit():
-                        valor_ecg = float(line)
-                        buffer.append({
-                            "value": valor_ecg,
-                            "timestamp": ahora
-                        })
+                    while ser.in_waiting > 0:
+                        linea = ser.readline().decode("utf-8").strip()
+                        print(f"ECG linea recibida: '{linea}' (in_waiting={ser.in_waiting})")  # Debug: datos recibidos
+                        if linea.isdigit():
+                            buffer.append(int(linea))
+                except UnicodeDecodeError:
+                    print("Error de codificación al leer ECG")  # Debug: error de codificación
+                    pass
                 except Exception as e:
                     print(f"Error leyendo ECG: {e}")
 
             # Enviar datos cada intervalo
             if ahora - ultimo_envio >= intervalo and buffer:
-                rabbitmq_data = {
-                    "patient_id": current_patient_id,
-                    "doctor_id": current_doctor_id,
-                    "ecg_data": buffer,
-                    "timestamp": timestamp()
-                }
-                send_to_rabbitmq("ecg", rabbitmq_data)
-                
-                mqtt_data = {
-                    "patient_id": current_patient_id,
-                    "doctor_id": current_doctor_id,
-                    "ecg_data": buffer,
-                    "timestamp": timestamp()
-                }
-                client.publish(mqtt_topic_ecg, json.dumps(mqtt_data))
-                print(f"ECG: {len(buffer)} muestras enviadas")
-                
+                print(f"ECG: Enviando {len(buffer)} muestras")
+                try:
+                    # Enviar a RabbitMQ
+                    rabbitmq_data = {
+                        "patient_id": current_patient_id,
+                        "doctor_id": current_doctor_id,
+                        "ecg_values": buffer,
+                        "timestamp": ahora
+                    }
+                    send_to_rabbitmq("ecg", rabbitmq_data)
+                    print("ECG publicado en RabbitMQ correctamente")  # Debug: éxito RabbitMQ
+                except Exception as e:
+                    print(f"Fallo al publicar ECG en RabbitMQ: {e}")  # Debug: error RabbitMQ
+                try:
+                    # Enviar a MQTT
+                    mqtt_data = {
+                        "patient_id": current_patient_id,
+                        "doctor_id": current_doctor_id,
+                        "ecg": buffer,
+                        "timestamp": ahora
+                    }
+                    client.publish(mqtt_topic_ecg, json.dumps(mqtt_data))
+                    print("ECG publicado en MQTT correctamente")  # Debug: éxito MQTT
+                except Exception as e:
+                    print(f"Fallo al publicar ECG en MQTT: {e}")  # Debug: error MQTT
                 buffer = []
                 ultimo_envio = ahora
 
         except Exception as e:
-            print(f"Error en publicar ECG: {str(e)}")
+            print(f"Error en publicar ECG: {str(e)}")  # Debug: error general
             publicar_status(f"Error en publicar ECG: {str(e)}")
             time.sleep(0.1)
 
@@ -611,12 +624,17 @@ def get_sensors_status():
     
     # Probar HX710B (sensor de presión)
     try:
+        print("[DEBUG] Intentando inicializar HX710B...")
         sensor_presion = HX710B(HX710B_DOUT, HX710B_SCK)
+        print("[DEBUG] Sensor HX710B inicializado. Leyendo presión...")
         presion = sensor_presion.read_pressure_mmhg()
+        print(f"[DEBUG] Lectura de presión: {presion}")
         if presion is not None:
             status["HX710B"] = True
-    except Exception:
-        pass
+        else:
+            print("[DEBUG] No se obtuvo presión válida del sensor HX710B.")
+    except Exception as e:
+        print(f"[DEBUG] Error al probar HX710B: {e}")
     
     return status
 

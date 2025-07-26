@@ -84,7 +84,7 @@ class MLX90614:
 
 # ---------- Clase HX710B para presión arterial ----------
 class HX710B:
-    def __init__(self, dout_pin, sck_pin, offset=0, scale=10060.60):
+    def __init__(self, dout_pin, sck_pin, offset=0, scale=10067.60):
         self.dout_pin = dout_pin
         self.sck_pin = sck_pin
         self.offset = offset
@@ -154,24 +154,45 @@ def detectar_sistolica_diastolica_oscilometrico(presiones):
     if len(presiones) < 10:
         print("No hay suficientes datos para análisis oscilométrico.")
         return None, None
+    
+    print(f"\n=== ANÁLISIS OSCILOMÉTRICO ===")
+    print(f"Datos de entrada: {len(presiones)} muestras")
+    print(f"Rango de presiones: {min(presiones):.1f} - {max(presiones):.1f} mmHg")
+    
     # 1. Suavizar la señal
     presiones_suavizadas = media_movil(presiones, ventana=5)
+    
     # 2. Calcular diferencias (oscilaciones)
     diffs = [abs(presiones_suavizadas[i] - presiones_suavizadas[i-1]) for i in range(1, len(presiones_suavizadas))]
-    print("\nPresiones (suavizadas):", [f"{p:.1f}" for p in presiones_suavizadas])
-    print("Oscilaciones (diffs):", [f"{d:.2f}" for d in diffs])
+    
+    print(f"\nPresiones (suavizadas): {[f'{p:.1f}' for p in presiones_suavizadas]}")
+    print(f"Oscilaciones (diffs): {[f'{d:.2f}' for d in diffs]}")
+    
+    if not diffs:
+        print("No hay oscilaciones detectadas")
+        return None, None
+    
     max_osc = max(diffs)
     idx_max = diffs.index(max_osc) + 1
+    
+    print(f"\nMáxima oscilación: {max_osc:.2f} en índice {idx_max}")
+    print(f"Presión en máximo: {presiones_suavizadas[idx_max]:.1f} mmHg")
+    
+    # 3. Buscar sistólica y diastólica con múltiples estrategias
     resultados = {}
-    for umbral_pct in [0.2,0.3,0.4, 0.5, 0.6]:
+    
+    # Estrategia 1: Umbrales tradicionales
+    for umbral_pct in [0.2, 0.3, 0.4, 0.5, 0.6]:
         umbral = umbral_pct * max_osc
         sistolica_temp = None
         diastolica_temp = None
+        
         # Buscar sistólica (antes del máximo) - valor más ALTO
         for i in range(1, idx_max):
             if diffs[i] > umbral:
                 sistolica_temp = presiones_suavizadas[i]
                 break
+        
         # Buscar diastólica (después del máximo) - valor más BAJO
         for i in range(idx_max, len(diffs)):
             if diffs[i] < umbral:
@@ -191,12 +212,72 @@ def detectar_sistolica_diastolica_oscilometrico(presiones):
             sistolica = sistolica_temp
             diastolica = diastolica_temp
             
-        resultados[umbral_pct] = (sistolica, diastolica)
-    print("\nResultados para diferentes umbrales:")
-    for pct, (sis, dias) in resultados.items():
-        print(f"  Umbral {int(pct*100)}%: Sistólica={sis:.1f} mmHg, Diastólica={dias:.1f} mmHg" if sis and dias else f"  Umbral {int(pct*100)}%: No detectada")
-    # Devuelve el resultado para 50% (clásico)
-    return resultados[0.5]
+        resultados[f"umbral_{int(umbral_pct*100)}"] = (sistolica, diastolica)
+    
+    # Estrategia 2: Buscar en todo el rango de presiones
+    presiones_ordenadas = sorted(presiones_suavizadas)
+    if len(presiones_ordenadas) >= 2:
+        # Sistólica: valor alto (último 25% de valores)
+        idx_sistolica = int(len(presiones_ordenadas) * 0.75)
+        sistolica_rango = presiones_ordenadas[idx_sistolica]
+        
+        # Diastólica: valor bajo (primer 25% de valores)
+        idx_diastolica = int(len(presiones_ordenadas) * 0.25)
+        diastolica_rango = presiones_ordenadas[idx_diastolica]
+        
+        resultados["rango"] = (sistolica_rango, diastolica_rango)
+    
+    # Estrategia 3: Buscar cerca del máximo de oscilaciones
+    if idx_max < len(presiones_suavizadas):
+        presion_max = presiones_suavizadas[idx_max]
+        # Buscar valores cercanos al máximo
+        valores_cercanos = []
+        for i in range(max(0, idx_max-3), min(len(presiones_suavizadas), idx_max+4)):
+            valores_cercanos.append(presiones_suavizadas[i])
+        
+        if valores_cercanos:
+            valores_cercanos.sort()
+            sistolica_cercana = valores_cercanos[-1]  # Más alto
+            diastolica_cercana = valores_cercanos[0]   # Más bajo
+            resultados["cercano"] = (sistolica_cercana, diastolica_cercana)
+    
+    print(f"\n=== RESULTADOS POR ESTRATEGIA ===")
+    for estrategia, (sis, dias) in resultados.items():
+        if sis and dias:
+            print(f"  {estrategia}: Sistólica={sis:.1f} mmHg, Diastólica={dias:.1f} mmHg")
+        else:
+            print(f"  {estrategia}: No detectada")
+    
+    # Seleccionar el mejor resultado
+    # Prioridad: 1) umbral_50, 2) cercano, 3) rango
+    mejor_resultado = None
+    
+    if "umbral_50" in resultados and resultados["umbral_50"][0] and resultados["umbral_50"][1]:
+        mejor_resultado = resultados["umbral_50"]
+        print(f"\nSeleccionado: umbral_50")
+    elif "cercano" in resultados and resultados["cercano"][0] and resultados["cercano"][1]:
+        mejor_resultado = resultados["cercano"]
+        print(f"\nSeleccionado: cercano")
+    elif "rango" in resultados and resultados["rango"][0] and resultados["rango"][1]:
+        mejor_resultado = resultados["rango"]
+        print(f"\nSeleccionado: rango")
+    else:
+        # Buscar cualquier resultado válido
+        for estrategia, (sis, dias) in resultados.items():
+            if sis and dias:
+                mejor_resultado = (sis, dias)
+                print(f"\nSeleccionado: {estrategia} (fallback)")
+                break
+    
+    if mejor_resultado:
+        sistolica, diastolica = mejor_resultado
+        print(f"\n=== RESULTADO FINAL ===")
+        print(f"Sistólica: {sistolica:.1f} mmHg")
+        print(f"Diastólica: {diastolica:.1f} mmHg")
+        return sistolica, diastolica
+    else:
+        print(f"\n=== NO SE DETECTARON VALORES ===")
+        return None, None
 
 # ---------- Medición automática de presión arterial ----------
 def medir_presion_automatica_pulsos(velocidad=85, pulso_motor=0.1, pausa_lectura=0.01):
@@ -205,32 +286,40 @@ def medir_presion_automatica_pulsos(velocidad=85, pulso_motor=0.1, pausa_lectura
     for _ in range(5):
         sensor.read_pressure_mmhg()
         time.sleep(0.02)
-    print("\n--- Iniciando medición automática de presión arterial (inflado por pulsos) ---")
+    print("\n--- Iniciando medición automática de presión arterial (3 ciclos de inflado) ---")
     valvula_cerrar()
-    print("Cerrando válvula y comenzando inflado por pulsos")
+    print("Cerrando válvula y comenzando inflado en 3 ciclos")
     time.sleep(0.2)
-    presion_objetivo = 230
     presiones = []
     tiempos = []
     t0 = time.time()
     
-    # Fase de inflado
-    while True:
+    # Fase 1: Inflado en exactamente 3 ciclos
+    print("Fase 1: Inflado en 3 ciclos...")
+    ciclos_inflado = 3
+    for ciclo in range(ciclos_inflado):
+        print(f"Ciclo {ciclo + 1}/{ciclos_inflado}")
+        
+        # Inflar
         motor_inflar(velocidad)
         time.sleep(pulso_motor)
         motor_parar()
         time.sleep(pausa_lectura)
+        
+        # Leer presión después del ciclo
         presion = sensor.read_pressure_mmhg()
         t = time.time() - t0
         if presion:
             presiones.append(presion)
             tiempos.append(t)
-            print(f"Presión: {presion:.1f} mmHg", end='\r')
-            if presion >= presion_objetivo or presion > 240:
-                break
+            print(f"  Presión después del ciclo {ciclo + 1}: {presion:.1f} mmHg")
+        
+        # Pausa entre ciclos (excepto después del último)
+        if ciclo < ciclos_inflado - 1:
+            time.sleep(0.5)  # Pausa de 0.5 segundos entre ciclos
                 
-    # Mantener presión objetivo 6 segundos
-    print("\nPresión objetivo alcanzada. Manteniendo presión...")
+    # Mantener presión 6 segundos
+    print(f"\nFase 2: Manteniendo presión por 6 segundos...")
     tiempo_mantener = 6
     t_inicio_mantener = time.time()
     while time.time() - t_inicio_mantener < tiempo_mantener:
@@ -244,7 +333,7 @@ def medir_presion_automatica_pulsos(velocidad=85, pulso_motor=0.1, pausa_lectura
         
     motor_parar()
     valvula_cerrar()
-    print("\nMantención finalizada. Desinflando lentamente...")
+    print("\nFase 3: Desinflando lentamente...")
     
     # Desinflado controlado
     desinflando = True
@@ -269,11 +358,23 @@ def medir_presion_automatica_pulsos(velocidad=85, pulso_motor=0.1, pausa_lectura
     valvula_abrir()  # Liberar presión al final
     print("\nMedición finalizada. Procesando datos...")
     
+    # Validación de datos
+    print(f"\n=== VALIDACIÓN DE DATOS ===")
+    print(f"Total de muestras: {len(presiones)}")
+    if len(presiones) < 10:
+        print("ERROR: Muy pocas muestras para análisis")
+        return None, None
+    
+    print(f"Rango de presiones: {min(presiones):.1f} - {max(presiones):.1f} mmHg")
+    print(f"Duración total: {tiempos[-1] - tiempos[0]:.1f} segundos")
+    
+    # Verificar que hay variación en las presiones
+    if max(presiones) - min(presiones) < 20:
+        print("ADVERTENCIA: Poca variación en las presiones")
+    
     # Procesamiento oscilométrico
     sistolica, diastolica = detectar_sistolica_diastolica_oscilometrico(presiones)
     
-    # Los valores ya están corregidos en el algoritmo oscilométrico
-        
     print(f"\n--- Resultados ---")
     print(f"Presión Sistólica estimada: {sistolica:.1f} mmHg" if sistolica else "No detectada")
     print(f"Presión Diastólica estimada: {diastolica:.1f} mmHg" if diastolica else "No detectada")
